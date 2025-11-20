@@ -30,6 +30,7 @@ ctk.set_default_color_theme("blue")
 class PianoTrackerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+        print("Piano Tracker App v2.0 - Loaded")
 
         self.title("Piano Tracker & Xuất MIDI")
         self.geometry("1200x800")
@@ -41,7 +42,7 @@ class PianoTrackerApp(ctk.CTk):
         # Sidebar
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(7, weight=1)
+        self.sidebar_frame.grid_rowconfigure(11, weight=1) # Push everything up
 
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Piano Tracker", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
@@ -58,15 +59,18 @@ class PianoTrackerApp(ctk.CTk):
         self.set_c_btn = ctk.CTkButton(self.sidebar_frame, text="Chọn Nốt Đô (C4)", command=self.start_set_c, state="disabled")
         self.set_c_btn.grid(row=4, column=0, padx=20, pady=10)
 
+        self.preview_btn = ctk.CTkButton(self.sidebar_frame, text="Kiểm Tra Lưới", command=self.preview_grid_overlay, state="disabled", fg_color="green")
+        self.preview_btn.grid(row=5, column=0, padx=20, pady=10)
+
         self.process_btn = ctk.CTkButton(self.sidebar_frame, text="Bắt Đầu Xử Lý", command=self.start_processing, state="disabled")
-        self.process_btn.grid(row=5, column=0, padx=20, pady=10)
+        self.process_btn.grid(row=6, column=0, padx=20, pady=10)
 
         self.export_btn = ctk.CTkButton(self.sidebar_frame, text="Xuất MIDI", command=self.export_midi, state="disabled")
-        self.export_btn.grid(row=6, column=0, padx=20, pady=10)
+        self.export_btn.grid(row=7, column=0, padx=20, pady=10)
         
         # Key Range Config
         self.config_frame = ctk.CTkFrame(self.sidebar_frame)
-        self.config_frame.grid(row=7, column=0, padx=10, pady=10, sticky="ew")
+        self.config_frame.grid(row=8, column=0, padx=10, pady=10, sticky="ew")
         
         ctk.CTkLabel(self.config_frame, text="Cấu hình phím:").pack(pady=5)
         
@@ -81,8 +85,22 @@ class PianoTrackerApp(ctk.CTk):
         self.update_range_btn = ctk.CTkButton(self.config_frame, text="Cập nhật Range", command=self.update_key_range)
         self.update_range_btn.pack(pady=5, padx=5)
 
+        # MIDI Config
+        self.midi_config_frame = ctk.CTkFrame(self.sidebar_frame)
+        self.midi_config_frame.grid(row=9, column=0, padx=10, pady=10, sticky="ew")
+        
+        ctk.CTkLabel(self.midi_config_frame, text="Cấu hình MIDI:").pack(pady=5)
+        
+        self.bpm_entry = ctk.CTkEntry(self.midi_config_frame, placeholder_text="BPM (120)")
+        self.bpm_entry.pack(pady=5, padx=5)
+        self.bpm_entry.insert(0, "120")
+        
+        self.time_sig_entry = ctk.CTkEntry(self.midi_config_frame, placeholder_text="Nhịp (4/4)")
+        self.time_sig_entry.pack(pady=5, padx=5)
+        self.time_sig_entry.insert(0, "4/4")
+
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Trạng thái: Chờ", wraplength=180)
-        self.status_label.grid(row=8, column=0, padx=20, pady=20)
+        self.status_label.grid(row=10, column=0, padx=20, pady=20)
 
         # Main Content Area
         self.main_frame = ctk.CTkFrame(self, corner_radius=0)
@@ -129,6 +147,29 @@ class PianoTrackerApp(ctk.CTk):
         self.video_canvas.bind("<Button-1>", self.on_mouse_click)
         self.video_canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.video_canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
+
+    def finish_calibration(self):
+        self.calibration_mode = False
+        print("Hoàn tất chọn vùng:", self.calibration_points)
+        self.status_label.configure(text="Đã chọn vùng xong.")
+        
+        # calibration_points are already in original video coordinates
+        self.roi_points = list(self.calibration_points)
+        
+        # Enable buttons safely
+        try:
+            self.process_btn.configure(state="normal")
+            print("Enabled process_btn")
+        except Exception as e:
+            print(f"Error enabling process_btn: {e}")
+
+        try:
+            self.preview_btn.configure(state="normal")
+            print("Enabled preview_btn")
+        except Exception as e:
+            print(f"Error enabling preview_btn: {e}")
+            
+        self.display_frame(self.current_frame_cv)
 
     def update_key_range(self):
         s_note = self.start_note_entry.get()
@@ -549,8 +590,63 @@ class PianoTrackerApp(ctk.CTk):
         
         # calibration_points are already in original video coordinates
         self.roi_points = list(self.calibration_points)
+        self.preview_btn.configure(state="normal") # Enable preview button
         self.process_btn.configure(state="normal")
         self.display_frame(self.current_frame_cv)
+
+    def preview_grid_overlay(self):
+        """Show warped keyboard with grid overlay to verify alignment"""
+        if not hasattr(self, 'roi_points') or not hasattr(self, 'current_frame_cv'):
+            return
+            
+        from processor import VideoProcessor
+        
+        # Initialize temporary processor to get regions and warp
+        processor = VideoProcessor(self.video_path, self.roi_points, num_keys=self.num_keys, start_note=self.start_note_midi)
+        
+        # Warp current frame
+        warped = processor.warp_keyboard(self.current_frame_cv)
+        
+        # Create overlay
+        overlay = warped.copy()
+        regions = processor.get_key_regions()
+        
+        # Draw White keys first
+        for x, y, w, h, is_black, note in regions:
+            if not is_black:
+                cv2.rectangle(overlay, (x, y), (x + w, y + h), (200, 200, 200), 1) # Border only
+                # Fill with low opacity
+                cv2.rectangle(overlay, (x, y), (x + w, y + h), (255, 255, 255), -1)
+                
+        # Draw Black keys
+        for x, y, w, h, is_black, note in regions:
+            if is_black:
+                cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 0), 1) # Green border
+                cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 100, 0), -1) # Dark green fill
+
+        # Blend
+        alpha = 0.5
+        cv2.addWeighted(overlay, alpha, warped, 1 - alpha, 0, warped)
+        
+        # Display in canvas
+        # Similar to display_processing_preview but static
+        frame_rgb = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_rgb)
+        
+        # Resize for display
+        display_h = 200
+        scale = display_h / warped.shape[0]
+        display_w = int(warped.shape[1] * scale)
+        
+        img = img.resize((display_w, display_h), Image.Resampling.LANCZOS)
+        
+        self.current_image = ImageTk.PhotoImage(img)
+        self.video_canvas.config(width=800, height=display_h + 20)
+        self.video_canvas.delete("all")
+        self.video_canvas.create_image(400, display_h // 2, anchor="center", image=self.current_image)
+        
+        self.status_label.configure(text="Đang xem trước lưới phím. Nếu lệch, hãy điều chỉnh vùng chọn.")
+        processor.release() # Release cap inside processor (though we didn't use it for reading)
 
     def start_processing(self):
         if self.is_processing:
@@ -581,19 +677,37 @@ class PianoTrackerApp(ctk.CTk):
         from detector import KeyDetector
         from midi_writer import MidiWriter
         
+        # Get BPM and Time Signature
+        try:
+            bpm = int(self.bpm_entry.get())
+        except ValueError:
+            bpm = 120
+            
+        try:
+            ts_str = self.time_sig_entry.get()
+            num, den = map(int, ts_str.split('/'))
+            time_sig = (num, den)
+        except ValueError:
+            time_sig = (4, 4)
+            
         processor = VideoProcessor(self.video_path, self.roi_points, num_keys=self.num_keys, start_note=self.start_note_midi)
         detector = KeyDetector(target_hsv=self.target_hsv)
-        midi_writer = MidiWriter()
+        midi_writer = MidiWriter(bpm=bpm, time_signature=time_sig)
         
         # MIDI Note mapping
         start_note = self.start_note_midi
         
-        # Keep track of previous states to detect On/Off events
-        prev_states = [False] * self.num_keys
+        # Debouncing counters
+        keys_on_frames = [0] * self.num_keys
+        keys_off_frames = [0] * self.num_keys
+        
+        # Actual playing state (debounced)
+        playing_states = [False] * self.num_keys
         
         frame_count = 0
         fps = processor.cap.get(cv2.CAP_PROP_FPS)
         if fps == 0: fps = 30 # Fallback
+        print(f"Video FPS: {fps}")
         
         while self.is_processing:
             frame = processor.get_frame()
@@ -605,56 +719,97 @@ class PianoTrackerApp(ctk.CTk):
             
             current_time = frame_count / fps
             
-            for i, is_pressed in enumerate(states):
+            for i, is_pressed_raw in enumerate(states):
                 note = start_note + i
-                if is_pressed and not prev_states[i]:
-                    # Note On
+                
+                if is_pressed_raw:
+                    keys_on_frames[i] += 1
+                    keys_off_frames[i] = 0
+                else:
+                    keys_off_frames[i] += 1
+                    keys_on_frames[i] = 0
+                
+                # Debounce Logic
+                # Note On: Needs 2 consecutive frames of detection
+                if not playing_states[i] and keys_on_frames[i] >= 2:
+                    playing_states[i] = True
                     midi_writer.add_note_on(note, velocity=100, time=current_time)
                     print(f"Note On: {note} at {current_time:.2f}s")
-                    
-                elif not is_pressed and prev_states[i]:
-                    # Note Off
+                
+                # Note Off: Needs 3 consecutive frames of NO detection (sustain)
+                elif playing_states[i] and keys_off_frames[i] >= 3:
+                    playing_states[i] = False
                     midi_writer.add_note_off(note, velocity=0, time=current_time)
-            
-            prev_states = states
+        
             frame_count += 1
             
             # Update GUI (optional, might slow down)
-            if frame_count % 5 == 0:
-                self.after(0, lambda f=warped: self.display_processing_preview(f))
-        
+            if frame_count % 2 == 0: # Update more frequently
+                # Pass copy of frame and states
+                # We pass 'states' (raw detection) to preview so user sees what computer sees
+                self.after(0, lambda f=warped.copy(), s=states, p=processor: self.display_processing_preview(f, s, p))
+    
         processor.release()
         self.midi_writer = midi_writer # Store for export
         self.after(0, self.finish_processing)
 
-    def display_processing_preview(self, frame):
-        # Display the warped keyboard view
-        # Draw note names on the frame
-        frame_with_text = frame.copy()
+    def display_processing_preview(self, frame, states, processor):
+        # Display the warped keyboard view with overlay
+        frame_vis = frame.copy()
         
-        # Draw C notes
-        key_width = frame.shape[1] // self.num_keys
-        font = cv2.FONT_HERSHEY_SIMPLEX
+        # Get regions from processor to ensure alignment
+        regions = processor.get_key_regions()
         
-        for i in range(self.num_keys):
-            note_midi = self.start_note_midi + i
-            # C notes are 0, 12, 24... in MIDI relative to C-1 (0).
-            # MIDI 60 is C4. 60 % 12 == 0.
-            if note_midi % 12 == 0:
-                # It's a C
-                octave = (note_midi // 12) - 1
-                text = f"C{octave}"
-                x = i * key_width
-                cv2.putText(frame_with_text, text, (x, 20), font, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+        # Draw White keys first (background)
+        for i, (x, y, w, h, is_black, note) in enumerate(regions):
+            if not is_black:
+                is_pressed = states[i] if i < len(states) else False
+                
+                # Color: Green if pressed, White/Gray if not
+                if is_pressed:
+                    color = (0, 255, 0) 
+                else:
+                    color = (200, 200, 200)
+                
+                # Draw filled rect
+                cv2.rectangle(frame_vis, (x, y), (x + w, y + h), color, -1)
+                # Draw border
+                cv2.rectangle(frame_vis, (x, y), (x + w, y + h), (50, 50, 50), 1)
+                
+                # Draw Note Name for C
+                if note % 12 == 0:
+                    octave = (note // 12) - 1
+                    cv2.putText(frame_vis, f"C{octave}", (x + 2, y + h - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 0), 1)
+
+        # Draw Black keys second (foreground)
+        for i, (x, y, w, h, is_black, note) in enumerate(regions):
+            if is_black:
+                is_pressed = states[i] if i < len(states) else False
+                
+                if is_pressed:
+                    color = (0, 200, 0)
+                else:
+                    color = (30, 30, 30)
+                
+                cv2.rectangle(frame_vis, (x, y), (x + w, y + h), color, -1)
+                cv2.rectangle(frame_vis, (x, y), (x + w, y + h), (100, 100, 100), 1)
         
-        frame_rgb = cv2.cvtColor(frame_with_text, cv2.COLOR_BGR2RGB)
-        h, w, _ = frame_rgb.shape
+        # Convert to RGB for Tkinter
+        frame_rgb = cv2.cvtColor(frame_vis, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(frame_rgb)
-        img = img.resize((800, 100), Image.Resampling.NEAREST)
+        
+        # Resize for better visibility in GUI if needed, but keep aspect ratio
+        # Target height is 100 in processor. Let's scale up slightly.
+        display_h = 150
+        scale = display_h / frame.shape[0]
+        display_w = int(frame.shape[1] * scale)
+        
+        img = img.resize((display_w, display_h), Image.Resampling.NEAREST)
         
         self.current_image = ImageTk.PhotoImage(img)
-        self.video_canvas.config(width=800, height=100)
-        self.video_canvas.create_image(400, 50, anchor="center", image=self.current_image)
+        self.video_canvas.config(width=800, height=display_h + 20)
+        self.video_canvas.delete("all")
+        self.video_canvas.create_image(400, display_h // 2, anchor="center", image=self.current_image)
 
     def finish_processing(self):
         self.is_processing = False

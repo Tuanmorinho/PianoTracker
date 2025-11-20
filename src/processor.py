@@ -84,7 +84,60 @@ class VideoProcessor:
             return None
         return frame
 
-                
+    def warp_keyboard(self, frame):
+        """Apply perspective transform to extract keyboard region"""
+        warped = cv2.warpPerspective(frame, self.M, (self.target_w, self.target_h))
+        return warped
+
+    def get_key_states(self, warped_frame, detector):
+        """Detect which keys are pressed based on color detection"""
+        mask = detector.detect(warped_frame)
+        regions = self.get_key_regions()
+        
+        # Separate black and white regions for processing
+        black_regions = [r for r in regions if r[4]] # r[4] is is_black
+        
+        key_states = []
+        
+        # Configurable padding to ignore edges of keys (avoids overlap/bleeding)
+        padding_x = 2 
+        
+        for x, y, w, h, is_black, note in regions:
+            # Create a mask for the current key
+            key_mask = np.zeros_like(mask)
+            
+            # Apply padding to the drawn rectangle
+            # Ensure width is at least 1 pixel after padding
+            pad_w = max(1, w - 2 * padding_x)
+            pad_x = x + padding_x
+            
+            cv2.rectangle(key_mask, (pad_x, y), (pad_x + pad_w, y + h), 255, -1)
+            
+            if not is_black:
+                # If it's a white key, subtract overlapping black keys
+                # We also expand the black key subtraction slightly to be safe
+                sub_padding = 1
+                for bx, by, bw, bh, b_is_black, b_note in black_regions:
+                    if bx < x + w and bx + bw > x:
+                        # Subtract black key region with slight expansion
+                        cv2.rectangle(key_mask, (bx - sub_padding, by), (bx + bw + sub_padding, by + bh), 0, -1)
+            
+            # Combine with the detection mask
+            roi_active = cv2.bitwise_and(mask, mask, mask=key_mask)
+            
+            # Calculate percentage
+            key_area_pixels = cv2.countNonZero(key_mask)
+            active_pixels = cv2.countNonZero(roi_active)
+            
+            if key_area_pixels > 0:
+                percentage = active_pixels / key_area_pixels
+                # Slightly higher threshold to be stricter
+                is_pressed = percentage > 0.15 
+            else:
+                is_pressed = False
+            
+            key_states.append(is_pressed)
+        
         return key_states
 
     def release(self):
